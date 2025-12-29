@@ -91,11 +91,26 @@ type ApiHistory = {
   date_performed: string
 }
 
+type PaginatedResponse<T> = {
+  count?: number
+  next?: string | null
+  previous?: string | null
+  results: T
+}
+
+function normalizeApiResponse<T>(data: unknown): T {
+  if (data && typeof data === "object" && "results" in data) {
+    return (data as PaginatedResponse<T>).results
+  }
+  return data as T
+}
+
 async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_URL}${endpoint}`
   const config: RequestInit = {
     ...options,
     headers: {
+      Accept: "application/json",
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
@@ -107,13 +122,36 @@ async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   const response = await fetch(url, config)
   const text = await response.text()
-  const data = text ? JSON.parse(text) : null
+  const contentType = response.headers.get("content-type") || ""
 
-  if (!response.ok) {
-    throw new Error(data?.error || data?.message || "API request failed")
+  let parsedData: unknown = null
+  if (text) {
+    if (contentType.includes("application/json")) {
+      try {
+        parsedData = JSON.parse(text)
+      } catch (error) {
+        throw new Error("Réponse JSON invalide reçue de l'API")
+      }
+    } else if (!response.ok) {
+      parsedData = text
+    } else {
+      throw new Error("Réponse inattendue du serveur (non-JSON).")
+    }
   }
 
-  return data as T
+  const data = normalizeApiResponse<T>(parsedData)
+
+  if (!response.ok) {
+    const message =
+      typeof data === "string"
+        ? data
+        : (data as { error?: string; message?: string })?.error ||
+          (data as { error?: string; message?: string })?.message ||
+          "API request failed"
+    throw new Error(message)
+  }
+
+  return data
 }
 
 const mapUser = (user: ApiUser): User => ({
